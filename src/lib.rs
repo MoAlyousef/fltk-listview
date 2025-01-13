@@ -5,7 +5,6 @@ use std::rc::Rc;
 #[derive(Clone, Debug)]
 pub struct ListView {
     table: TableRow,
-    headers: Rc<RefCell<Vec<String>>>,
     data: Rc<RefCell<Vec<Vec<String>>>>,
 }
 
@@ -48,7 +47,6 @@ impl ListView {
 
         Self {
             table,
-            headers: Rc::new(RefCell::new(vec![])),
             data: Rc::new(RefCell::new(vec![])),
         }
     }
@@ -73,18 +71,17 @@ impl ListView {
             t.set_row_height_all((t.h() - 40) / t.rows() + 1);
         });
 
-        let headers = self.headers.clone();
         let data = self.data.clone();
 
         self.table
             .draw_cell(move |t, ctx, row, col, x, y, w, h| match ctx {
                 TableContext::StartPage => set_font(Font::Helvetica, 14),
                 TableContext::ColHeader => {
-                    Self::draw_header(&headers.borrow()[col as usize], x, y, w, h)
+                    Self::draw_header(&data.borrow()[0][col as usize], x, y, w, h)
                 }
                 TableContext::Cell => {
                     Self::draw_data(
-                        &data.borrow()[row as usize][col as usize],
+                        &data.borrow()[row as usize + 1][col as usize],
                         x,
                         y,
                         w,
@@ -109,11 +106,13 @@ impl ListView {
         });
     }
 
-    pub fn set_data(&mut self, headers: &[&str], data: &[&[&str]]) {
-        assert!(headers.len() == self.table.cols() as usize);
+    pub fn callback_row(&self) -> i32 {
+        self.table.callback_row() + 1
+    }
+
+    pub fn set_data(&mut self, data: &[&[&str]]) {
         assert!(data[0].len() == self.table.cols() as usize);
-        *self.headers.borrow_mut() = headers.iter().map(|s| s.to_string()).collect();
-            *self.data.borrow_mut() = data
+        *self.data.borrow_mut() = data  
             .iter()
             .map(|s| s.iter().map(|l| l.to_string()).collect::<Vec<_>>())
             .collect();

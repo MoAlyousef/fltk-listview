@@ -1,8 +1,8 @@
 use fltk::{prelude::*, *};
 use fltk_listview::ListView;
 
-const HEADERS: &[&str] = &["Name", "Breed", "Gender", "Price\t"];
 const DATA: &[&[&str]] = &[
+    &["Name", "Breed", "Gender", "Price"],
     &["Oscar", "Siamese", "Male", "$175.00"],
     &["Molly", "Poodle", "Female", "$300.00"],
     &["Brutus", "Manx", "Male", "$250.00"],
@@ -17,10 +17,13 @@ fn main() {
         .with_label("FLTK ListView Example");
     let mut listview = ListView::default_fill();
     listview.set_table(5, 4);
-    listview.set_data(HEADERS, DATA);
+    listview.set_data(DATA);
     listview.set_callback(|l| {
         println!(
-            "{}",
+            "row: {}, column: {}, {}: {}",
+            l.callback_row(),
+            l.callback_col(),
+            DATA[0][l.callback_col() as usize],
             DATA[l.callback_row() as usize][l.callback_col() as usize]
         );
     });
