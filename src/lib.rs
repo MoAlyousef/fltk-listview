@@ -1,20 +1,30 @@
 use fltk::{app, draw::*, enums::*, prelude::*, table::*};
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::{
+    ops::{Deref, DerefMut},
+    rc::Rc,
+};
 
-#[derive(Clone, Debug)]
-pub struct ListView {
-    table: TableRow,
-    data: Rc<RefCell<Vec<Vec<String>>>>,
+pub enum ListViewContext {
+    Cell,
+    ColHeader,
+    Other,
 }
 
-impl Default for ListView {
+#[derive(Clone, Debug)]
+pub struct ListView<const C: usize, const R: usize> {
+    table: TableRow,
+    headers: Rc<RefCell<[&'static str; C]>>,
+    data: Rc<RefCell<[[&'static str; C]; R]>>,
+}
+
+impl<const C: usize, const R: usize> Default for ListView<C, R> {
     fn default() -> Self {
-        Self::new(0, 0, 0, 0, None)
+        ListView::<C, R>::new(0, 0, 0, 0, None)
     }
 }
 
-impl ListView {
+impl<const C: usize, const R: usize> ListView<C, R> {
     fn draw_header(txt: &str, x: i32, y: i32, w: i32, h: i32) {
         push_clip(x, y, w, h);
         draw_box(FrameType::ThinUpBox, x, y, w, h, Color::FrameDefault);
@@ -44,44 +54,37 @@ impl ListView {
         table.set_type(TableRowSelectMode::Single);
         table.set_scrollbar_size(-1);
         table.end();
-
-        Self {
-            table,
-            data: Rc::new(RefCell::new(vec![])),
-        }
-    }
-
-    pub fn set_table(&mut self, rows: i32, cols: i32) {
-        self.table.set_rows(rows);
-        self.table.set_cols(cols);
+        table.set_rows(R as i32);
+        table.set_cols(C as i32);
         // rows
-        self.table.set_row_header(false);
-        self.table.set_row_resize(false);
-        self.table
-            .set_row_height_all((self.table.h() - 40) / self.table.rows());
+        table.set_row_header(false);
+        table.set_row_resize(false);
+        table.set_row_height_all((table.h() - 40) / table.rows());
         // columns
-        self.table.set_col_header_height(40);
-        self.table.set_col_header(true);
-        self.table
-            .set_col_width_all(self.table.w() / self.table.cols());
-        self.table.set_col_resize(false);
+        table.set_col_header_height(40);
+        table.set_col_header(true);
+        table.set_col_width_all(table.w() / table.cols());
+        table.set_col_resize(false);
 
-        self.table.resize_callback(|t, _, _, _, _| {
+        table.resize_callback(|t, _, _, _, _| {
             t.set_col_width_all(t.w() / t.cols());
             t.set_row_height_all((t.h() - 40) / t.rows() + 1);
         });
 
-        let data = self.data.clone();
+        let headers = Rc::new(RefCell::new([""; C]));
+        let data = Rc::new(RefCell::new([[""; C]; R]));
 
-        self.table
-            .draw_cell(move |t, ctx, row, col, x, y, w, h| match ctx {
+        table.draw_cell({
+            let data = data.clone();
+            let headers = headers.clone();
+            move |t, ctx, row, col, x, y, w, h| match ctx {
                 TableContext::StartPage => set_font(Font::Helvetica, 14),
                 TableContext::ColHeader => {
-                    Self::draw_header(&data.borrow()[0][col as usize], x, y, w, h)
+                    Self::draw_header(headers.borrow()[col as usize], x, y, w, h)
                 }
                 TableContext::Cell => {
                     Self::draw_data(
-                        &data.borrow()[row as usize + 1][col as usize],
+                        data.borrow()[row as usize][col as usize],
                         x,
                         y,
                         w,
@@ -90,32 +93,181 @@ impl ListView {
                     );
                 }
                 _ => (),
-            });
+            }
+        });
+
+        Self {
+            table,
+            headers,
+            data,
+        }
     }
 
     pub fn default_fill() -> Self {
-        Self::default().size_of_parent().center_of_parent()
+        ListView::<C, R>::default()
+            .size_of_parent()
+            .center_of_parent()
     }
 
-    pub fn set_callback<F: FnMut(&mut Self) + 'static>(&mut self, mut cb: F) {
+    pub fn set_callback<F: FnMut(&mut Self, ListViewContext) + 'static>(&mut self, mut cb: F) {
         let mut this = self.clone();
         self.table.set_callback(move |t| {
-            if t.callback_context() == TableContext::Cell && app::event() == Event::Push {
-                cb(&mut this);
+            let ctx = t.callback_context();
+            if app::event() == Event::Push {
+                cb(
+                    &mut this,
+                    match ctx {
+                        TableContext::Cell => ListViewContext::Cell,
+                        TableContext::ColHeader => ListViewContext::ColHeader,
+                        _ => ListViewContext::Other,
+                    },
+                );
             }
         });
     }
 
-    pub fn callback_row(&self) -> i32 {
-        self.table.callback_row() + 1
+    pub fn set_data(&mut self, headers: [&'static str; C], data: [[&'static str; C]; R]) {
+        *self.headers.borrow_mut() = headers;
+        *self.data.borrow_mut() = data;
     }
 
-    pub fn set_data(&mut self, data: &[&[&str]]) {
-        assert!(data[0].len() == self.table.cols() as usize);
-        *self.data.borrow_mut() = data  
-            .iter()
-            .map(|s| s.iter().map(|l| l.to_string()).collect::<Vec<_>>())
-            .collect();
+    /// Initialize to position x, y
+    pub fn with_pos(mut self, x: i32, y: i32) -> Self {
+        let w = self.w();
+        let h = self.h();
+        self.resize(x, y, w, h);
+        self
+    }
+
+    /// Initialize to size width, height
+    pub fn with_size(mut self, width: i32, height: i32) -> Self {
+        let x = self.x();
+        let y = self.y();
+        let w = self.width();
+        let h = self.height();
+        if w == 0 || h == 0 {
+            self.widget_resize(x, y, width, height);
+        } else {
+            self.resize(x, y, width, height);
+        }
+        self
+    }
+
+    /// Initialize with a label
+    pub fn with_label(mut self, title: &str) -> Self {
+        self.set_label(title);
+        self
+    }
+
+    /// Initialize center of another widget
+    pub fn center_of<W: WidgetExt>(mut self, w: &W) -> Self {
+        debug_assert!(
+            w.width() != 0 && w.height() != 0,
+            "center_of requires the size of the widget to be known!"
+        );
+        let sw = self.width() as f64;
+        let sh = self.height() as f64;
+        let ww = w.width() as f64;
+        let wh = w.height() as f64;
+        let sx = (ww - sw) / 2.0;
+        let sy = (wh - sh) / 2.0;
+        let wx = if w.as_window().is_some() { 0 } else { w.x() };
+        let wy = if w.as_window().is_some() { 0 } else { w.y() };
+        self.resize(sx as i32 + wx, sy as i32 + wy, sw as i32, sh as i32);
+        self.redraw();
+        self
+    }
+
+    /// Initialize center of another widget on the x axis
+    pub fn center_x<W: WidgetExt>(mut self, w: &W) -> Self {
+        debug_assert!(
+            w.width() != 0 && w.height() != 0,
+            "center_of requires the size of the widget to be known!"
+        );
+        let sw = self.width() as f64;
+        let sh = self.height() as f64;
+        let ww = w.width() as f64;
+        let sx = (ww - sw) / 2.0;
+        let sy = self.y();
+        let wx = if w.as_window().is_some() { 0 } else { w.x() };
+        self.resize(sx as i32 + wx, sy, sw as i32, sh as i32);
+        self.redraw();
+        self
+    }
+
+    /// Initialize center of another widget on the y axis
+    pub fn center_y<W: WidgetExt>(mut self, w: &W) -> Self {
+        debug_assert!(
+            w.width() != 0 && w.height() != 0,
+            "center_of requires the size of the widget to be known!"
+        );
+        let sw = self.width() as f64;
+        let sh = self.height() as f64;
+        let wh = w.height() as f64;
+        let sx = self.x();
+        let sy = (wh - sh) / 2.0;
+        let wy = if w.as_window().is_some() { 0 } else { w.y() };
+        self.resize(sx, sy as i32 + wy, sw as i32, sh as i32);
+        self.redraw();
+        self
+    }
+
+    /// Initialize center of parent
+    pub fn center_of_parent(mut self) -> Self {
+        if let Some(w) = self.parent() {
+            debug_assert!(
+                w.width() != 0 && w.height() != 0,
+                "center_of requires the size of the widget to be known!"
+            );
+            let sw = self.width() as f64;
+            let sh = self.height() as f64;
+            let ww = w.width() as f64;
+            let wh = w.height() as f64;
+            let sx = (ww - sw) / 2.0;
+            let sy = (wh - sh) / 2.0;
+            let wx = if w.as_window().is_some() { 0 } else { w.x() };
+            let wy = if w.as_window().is_some() { 0 } else { w.y() };
+            self.resize(sx as i32 + wx, sy as i32 + wy, sw as i32, sh as i32);
+            self.redraw();
+        }
+        self
+    }
+
+    /// Initialize to the size of another widget
+    pub fn size_of<W: WidgetExt>(mut self, w: &W) -> Self {
+        debug_assert!(
+            w.width() != 0 && w.height() != 0,
+            "size_of requires the size of the widget to be known!"
+        );
+        let x = self.x();
+        let y = self.y();
+        self.resize(x, y, w.width(), w.height());
+        self
+    }
+
+    /// Initialize to the size of the parent
+    pub fn size_of_parent(mut self) -> Self {
+        if let Some(parent) = self.parent() {
+            let w = parent.width();
+            let h = parent.height();
+            let x = self.x();
+            let y = self.y();
+            self.resize(x, y, w, h);
+        }
+        self
     }
 }
-fltk::widget_extends!(ListView, TableRow, table);
+
+impl<const C: usize, const R: usize> Deref for ListView<C, R> {
+    type Target = TableRow;
+
+    fn deref(&self) -> &Self::Target {
+        &self.table
+    }
+}
+
+impl<const C: usize, const R: usize> DerefMut for ListView<C, R> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.table
+    }
+}
